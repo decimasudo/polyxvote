@@ -1,16 +1,14 @@
 import { NextResponse } from 'next/server';
-import { rwClient } from '@/lib/twitter';
 import { supabase } from '@/lib/supabase';
-import { generateFunFact } from '@/lib/ai';
 
-// Agar route ini selalu dinamis (tidak dicache)
+// Force dynamic so it runs fresh every time Vercel Cron triggers it
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    console.log("[DEBUG] 1. Starting Fetching Polymarket...");
+    console.log("[CRON] 1. Starting Alpha Scan...");
     
-    // Fetch Top 10 Trending
+    // 1. Fetch Top Trending Events from Polymarket
     const polyRes = await fetch(
       'https://gamma-api.polymarket.com/events?limit=10&active=true&closed=false&order=volume&descending=true'
     );
@@ -21,101 +19,119 @@ export async function GET() {
       return NextResponse.json({ error: 'No events found' }, { status: 404 });
     }
 
-    console.log(`[DEBUG] Got ${polyData.length} events. Checking filters...`);
-
     let targetEvent = null;
     let marketDetails = null;
 
-    // Loop debug untuk melihat kenapa event di-skip
+    // 2. Filter: Find a fresh event we haven't analyzed yet
     for (const event of polyData) {
+      // Check Supabase: Have we logged this market_id before?
       const { data: existing } = await supabase
-        .from('posted_events')
+        .from('alpha_logs')
         .select('id')
-        .eq('event_id', event.id)
+        .eq('market_id', event.id)
         .single();
 
       if (existing) {
-        console.log(`[SKIP] "${event.title}" (Reason: Already in DB)`);
+        // Skip if we already have this in our "Feed"
         continue;
       }
 
-      // Cek Struktur Market
+      // Validating Market Structure (Must have 2 outcomes: Yes/No)
       const market = event.markets?.[0];
-      if (!market) {
-        console.log(`[SKIP] "${event.title}" (Reason: No market data)`);
-        continue;
-      }
+      if (!market) continue;
 
-      // PERBAIKAN BUG: Parse outcome prices/outcomes dengan aman
       let outcomes;
       try {
-        // Polymarket kadang kirim string JSON, kadang array langsung
         outcomes = typeof market.outcomes === 'string' ? JSON.parse(market.outcomes) : market.outcomes;
-      } catch (e) {
-        outcomes = [];
-      }
+      } catch (e) { outcomes = []; }
 
-      // Kita cari yang opsinya cuma 2 ("Yes", "No")
-      if (!Array.isArray(outcomes) || outcomes.length !== 2) {
-        const count = Array.isArray(outcomes) ? outcomes.length : 'Unknown';
-        console.log(`[SKIP] "${event.title}" (Reason: Outcomes count is ${count}, need 2)`);
-        continue;
+      if (Array.isArray(outcomes) && outcomes.length === 2) {
+        // Found a fresh target!
+        targetEvent = event;
+        marketDetails = market;
+        break; 
       }
-
-      // KETEMU!
-      console.log(`[SUCCESS] FOUND TARGET: "${event.title}"`);
-      targetEvent = event;
-      marketDetails = market;
-      break; 
     }
 
     if (!targetEvent || !marketDetails) {
-      console.log("[RESULT] No suitable event found to post.");
-      return NextResponse.json({ message: 'All top events skipped (checked logs).' });
+      console.log("[RESULT] No new events to analyze (Feed is up to date).");
+      return NextResponse.json({ message: 'Feed is up to date.' });
     }
 
-    // --- PROSES POSTING ---
+    // 3. Prepare Data for AI
     const title = targetEvent.title;
-    
-    // Parsing harga outcome
     let outcomePrices;
     try {
         outcomePrices = typeof marketDetails.outcomePrices === 'string' 
             ? JSON.parse(marketDetails.outcomePrices) 
             : marketDetails.outcomePrices;
-    } catch (e) {
-        console.log("[ERROR] Failed to parse prices");
-        return NextResponse.json({ error: "Price parse error" }, { status: 500 });
-    }
+    } catch (e) { outcomePrices = [0.5, 0.5]; }
 
     const probYes = Math.round(outcomePrices[0] * 100); 
+
+    // 4. Generate "Chill Mate" Analysis (Inline AI Call)
+    console.log(`[AI] Analyzing: ${title}`);
     
-    console.log("[DEBUG] Generating AI Fact...");
-    const funFact = await generateFunFact(title);
+    let chillAnalysis = "market looks interesting.";
+    if (process.env.OPENROUTER_API_KEY) {
+        try {
+            const aiRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://polyxvote.com", 
+                },
+                body: JSON.stringify({
+                    model: "google/gemini-2.0-flash-lite-preview-02-05:free", 
+                    messages: [
+                        {
+                            role: "system",
+                            content: `You are a crypto-native friend giving advice to a mate. 
+                            Style: lowercase, casual, direct, use slang (sus, alpha, fade, send it). 
+                            Constraint: NO EMOJIS. Max 200 chars. 
+                            Task: Give a hot take on this prediction market. Always mention the odds.`
+                        },
+                        {
+                            role: "user",
+                            content: `Market: "${title}". Current Odds: ${probYes}% chance of happening.`
+                        }
+                    ]
+                })
+            });
+            const aiJson = await aiRes.json();
+            chillAnalysis = aiJson.choices?.[0]?.message?.content || chillAnalysis;
+            // Clean up: Remove quotes if AI added them
+            chillAnalysis = chillAnalysis.replace(/"/g, '').trim().toLowerCase();
+        } catch (e) {
+            console.error("[AI ERROR]", e);
+        }
+    }
 
-    // Format Tweet TANPA Emoticon
-    const tweetText = `TRENDING: ${title}\n\nFACT: ${funFact}\n\nMARKET ODDS: ${probYes}% Chance\n\nWhat do you think? Vote below!`;
+    // 5. Save to Supabase (The "Feed")
+    const { error: insertError } = await supabase
+        .from('alpha_logs')
+        .insert({
+            market_id: targetEvent.id,
+            market_title: title,
+            market_slug: targetEvent.slug,
+            chill_analysis: chillAnalysis,
+            odds: probYes
+        });
 
-    console.log("[DEBUG] Posting to X...");
-    const tweet = await rwClient.v2.tweet({
-      text: tweetText,
-      poll: {
-        options: ["Yes", "No"],
-        duration_minutes: 1440 
-      }
-    });
-    console.log("[SUCCESS] Tweet Posted! ID:", tweet.data.id);
+    if (insertError) {
+        throw new Error(insertError.message);
+    }
 
-    // Simpan ke DB
-    await supabase.from('posted_events').insert({
-      event_id: targetEvent.id,
-      title: title
-    });
+    console.log(`[SUCCESS] Added new alpha: ${title}`);
 
     return NextResponse.json({ 
       success: true, 
-      posted: title, 
-      tweet_id: tweet.data.id 
+      data: {
+        title: title,
+        analysis: chillAnalysis,
+        odds: probYes
+      }
     });
 
   } catch (error: any) {
