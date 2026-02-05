@@ -20,10 +20,8 @@ export default function LandingPage() {
       {/* --- NAVIGATION --- */}
       <nav className="sticky top-0 z-50 bg-white/90 backdrop-blur-sm border-b-4 border-black px-6 h-20 flex items-center justify-between">
         <div className="flex items-center gap-4">
-          {/* Logo Box */}
-          <div className="w-10 h-10 bg-blue-600 border-2 border-black shadow-hard-sm flex items-center justify-center text-white animate-bounce">
-            <Terminal size={20} />
-          </div>
+          {/* Logo Image */}
+          <img src="/logo.jpeg" alt="PolyxVote Logo" className="w-10 h-10 border-2 border-black shadow-hard-sm" />
           <span className="text-xl font-bold tracking-tighter uppercase hidden md:inline">
             Poly<span className="text-blue-600">x</span>Vote
           </span>
