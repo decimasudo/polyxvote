@@ -52,16 +52,16 @@ export default function LandingPage() {
           </div>
 
           <h1 className="text-2xl md:text-5xl font-black tracking-tighter text-black mb-8 max-w-4xl mx-auto leading-normal uppercase drop-shadow-[4px_4px_0_rgba(255,255,255,1)]">
-            The Bloomberg Terminal for <br/>
+            Improving prediction markets <br/>
             <span className="text-white bg-blue-600 px-4 border-2 border-black shadow-hard inline-block transform rotate-1 mt-2">
-              X Shitposting
+              through collective belief.
             </span>
           </h1>
           
           <p className="text-xs md:text-sm text-gray-800 mb-12 max-w-2xl mx-auto leading-loose bg-white/80 p-4 border-2 border-black shadow-hard-sm backdrop-blur-sm">
-            `{'>'}` SCAN POLYMARKET ODDS.<br/>
-            `{'>'}` GENERATE "CHILL" ALPHA WITH AI.<br/>
-            `{'>'}` COPY-PASTE TO X & FARM ENGAGEMENT.
+            Measuring public conviction on X <br /> 
+            to Provide additional context for market probabilities. <br />
+            Operated continuously by Claude AI.
           </p>
           
           <div className="flex flex-col md:flex-row items-center justify-center gap-6">
