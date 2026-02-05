@@ -9,8 +9,9 @@ export async function GET() {
     console.log("[CRON] 1. Starting Alpha Scan...");
     
     // 1. Fetch Top Trending Events from Polymarket
+    // Limit increased to 20 to ensure we find fresh events
     const polyRes = await fetch(
-      'https://gamma-api.polymarket.com/events?limit=10&active=true&closed=false&order=volume&descending=true'
+      'https://gamma-api.polymarket.com/events?limit=20&active=true&closed=false&order=volume&descending=true'
     );
     const polyData = await polyRes.json();
 
@@ -69,10 +70,11 @@ export async function GET() {
 
     const probYes = Math.round(outcomePrices[0] * 100); 
 
-    // 4. Generate "Chill Mate" Analysis (Inline AI Call)
+    // 4. Generate "Chill Mate" Analysis (Robust Error Handling)
     console.log(`[AI] Analyzing: ${title}`);
     
-    let chillAnalysis = "market looks interesting.";
+    let chillAnalysis = "market looks interesting."; // Default fallback
+    
     if (process.env.OPENROUTER_API_KEY) {
         try {
             const aiRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -83,32 +85,47 @@ export async function GET() {
                     "HTTP-Referer": "https://polyxvote.com", 
                 },
                 body: JSON.stringify({
-                    model: "google/gemini-2.0-flash-lite-preview-02-05:free", 
+                    // Menggunakan model eksperimental yang biasanya lebih lenient/gratis
+                    model: "mistralai/mistral-7b-instruct", 
                     messages: [
                         {
                             role: "system",
-                            content: `You are a crypto-native friend giving advice to a mate. 
-                            Style: lowercase, casual, direct, use slang (sus, alpha, fade, send it). 
-                            Constraint: NO EMOJIS. Max 200 chars. 
-                            Task: Give a hot take on this prediction market. Always mention the odds.`
+                            content: `You are a crypto trader texting a friend. 
+                            Style: strict lowercase, no punctuation, use slang (ngmi, alpha, fade, send it, sus). 
+                            Constraint: MAX 20 WORDS. NO EMOJIS.
+                            Task: Give a cynical reason why the odds are wrong or right.`
                         },
                         {
                             role: "user",
-                            content: `Market: "${title}". Current Odds: ${probYes}% chance of happening.`
+                            content: `Event: "${title}". Odds: ${probYes}% Yes.`
                         }
                     ]
                 })
             });
-            const aiJson = await aiRes.json();
-            chillAnalysis = aiJson.choices?.[0]?.message?.content || chillAnalysis;
-            // Clean up: Remove quotes if AI added them
-            chillAnalysis = chillAnalysis.replace(/"/g, '').trim().toLowerCase();
+
+            if (!aiRes.ok) {
+                const errText = await aiRes.text();
+                console.error("[AI API ERROR]", errText);
+            } else {
+                const aiJson = await aiRes.json();
+                const content = aiJson.choices?.[0]?.message?.content;
+                
+                if (content) {
+                    // Bersihkan tanda kutip jika AI menambahkannya
+                    chillAnalysis = content.replace(/"/g, '').trim().toLowerCase();
+                } else {
+                    console.error("[AI EMPTY RESPONSE]", aiJson);
+                }
+            }
         } catch (e) {
-            console.error("[AI ERROR]", e);
+            console.error("[AI FETCH ERROR]", e);
         }
+    } else {
+        console.error("[AI KEY MISSING] Check .env.local OPENROUTER_API_KEY");
     }
 
     // 5. Save to Supabase (The "Feed")
+    // Note: Pastikan kamu sudah menjalankan SQL "Allow public insert" di Supabase
     const { error: insertError } = await supabase
         .from('alpha_logs')
         .insert({
